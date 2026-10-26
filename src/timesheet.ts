@@ -21,6 +21,18 @@ type Inbound =
 
 const EDITABLE = new Set<keyof RowOverride>(['title', 'start', 'end', 'minutes', 'description']);
 
+function isValidEdit(field: keyof RowOverride, value: unknown): boolean {
+  switch (field) {
+    case 'minutes':
+      return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 24 * 60;
+    case 'start':
+    case 'end':
+      return typeof value === 'string' && /^(\d{2}:\d{2})?$/.test(value);
+    default:
+      return typeof value === 'string' && value.length <= 5000;
+  }
+}
+
 /** The daily timesheet: one editable card per task, ready to copy into Odoo. */
 export class TimesheetPanel implements vscode.Disposable {
   private static current: TimesheetPanel | undefined;
@@ -87,10 +99,10 @@ export class TimesheetPanel implements vscode.Disposable {
       case 'ready':
         break;
       case 'nav':
-        this.date = m.today ? today() : addDays(this.date, m.delta ?? 0);
+        this.date = m.today ? today() : addDays(this.date, Math.sign(Number(m.delta) || 0));
         break;
       case 'edit':
-        if (!EDITABLE.has(m.field)) {
+        if (!EDITABLE.has(m.field) || !isValidEdit(m.field, m.value)) {
           return;
         }
         this.updateOverride(m.key, o => {

@@ -189,7 +189,9 @@ function capitalize(text: string): string {
 }
 
 function csvCell(value: string): string {
-  return /[",\r\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
+  // Titles come from Jira (written by others): stop Excel from running "=…", "+…", "@…" as formulas.
+  const safe = /^[=+\-@\t\r]/.test(value) ? `'${value}` : value;
+  return /[",\r\n]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
 }
 
 function mergeIntervals(intervals: Array<[number, number]>): Array<[number, number]> {

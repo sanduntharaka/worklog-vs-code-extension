@@ -110,7 +110,7 @@
     const badge =
       r.kind === 'jira'
         ? `<span class="badge jira">${esc(r.key.replace(/#\d+$/, ''))}</span>`
-        : `<span class="badge ${r.kind}">${r.kind === 'manual' ? 'Non-Jira' : r.kind === 'general' ? 'General' : 'Branch'}</span>`;
+        : `<span class="badge ${r.kind === 'manual' ? 'manual' : ''}">${r.kind === 'manual' ? 'Non-Jira' : r.kind === 'general' ? 'General' : 'Branch'}</span>`;
     const source = [
       ...r.commits.map((c) => `<li><span class="tag">commit</span>${esc(c)}</li>`),
       ...r.notes.map((n) => `<li><span class="tag">note</span>${esc(n)}</li>`),

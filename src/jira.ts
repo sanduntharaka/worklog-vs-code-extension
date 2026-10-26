@@ -15,7 +15,7 @@ export class Jira implements vscode.Disposable {
 
   browseUrl(key: string): string | undefined {
     const base = getConfig().jiraBaseUrl;
-    return base ? `${base}/browse/${key}` : undefined;
+    return base ? `${base}/browse/${encodeURIComponent(key)}` : undefined;
   }
 
   async connect(): Promise<void> {
@@ -93,11 +93,16 @@ export class Jira implements vscode.Disposable {
   }
 
   private request(base: string, path: string, email: string, token: string): Promise<Response> {
+    if (!base.toLowerCase().startsWith('https://')) {
+      return Promise.reject(new Error('Jira URL must use https'));
+    }
     return fetch(base + path, {
       headers: {
         Authorization: `Basic ${Buffer.from(`${email}:${token}`).toString('base64')}`,
         Accept: 'application/json',
       },
+      // Never carry the credentials along a redirect to another host.
+      redirect: 'error',
     });
   }
 

@@ -16,7 +16,8 @@ import { taskFromBranch } from './tasks';
 import { formatDuration, today } from './time';
 import { TaskInfo } from './types';
 
-const VERSION = '0.2.0';
+const VERSION = '0.2.1';
+const MAX_SUMMARY = 1000;
 
 interface AgentSettings {
   taskKeyPattern?: string;
@@ -82,6 +83,10 @@ function resolveTask(args: { taskKey?: string; cwd?: string }): { task: TaskInfo
     const raw = args.taskKey.trim();
     const manual = raw.startsWith('manual:');
     const key = manual ? raw : raw.toUpperCase();
+    // Only real task keys: this becomes a key in the timesheet files.
+    if (!(manual ? /^manual:[a-z0-9-]{1,80}$/ : /^[A-Z][A-Z0-9]{0,19}-\d{1,9}$/).test(key)) {
+      throw new Error(`"${raw.slice(0, 40)}" is not a valid task key (expected something like "TEST-101").`);
+    }
     return { task: { key, title: store.getTitle(key) ?? findRow(key)?.title ?? key, kind: manual ? 'manual' : 'jira' } };
   }
   const cwd = args.cwd || process.env.CLAUDE_PROJECT_DIR || process.cwd();
@@ -137,6 +142,9 @@ function setWorkSummary(args: { summary?: string; taskKey?: string; cwd?: string
     .replace(/^[;\s]+|[;\s]+$/g, '');
   if (!summary) {
     throw new Error('summary is empty.');
+  }
+  if (summary.length > MAX_SUMMARY) {
+    throw new Error(`summary is too long (${summary.length} characters, max ${MAX_SUMMARY}). Make it shorter.`);
   }
   const { task } = resolveTask(args);
   const date = today();

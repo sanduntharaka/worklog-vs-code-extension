@@ -35,8 +35,9 @@ export class StatusBar implements vscode.Disposable {
     } else {
       const icon = state === 'tracking' ? '$(record)' : '$(clock)';
       this.item.text = `${icon} ${taskLabel(task)} · ${spent}${state === 'idle' ? ' (idle)' : ''}`;
-      tip.appendMarkdown(`**${taskLabel(task)}**${task.kind === 'jira' ? ` — ${task.title}` : ''}\n\n`);
-      tip.appendMarkdown(`${spent} today${state === 'idle' ? ' · idle, resumes on activity' : ''}`);
+      // Titles come from Jira / branch names: append as plain text, never as markdown.
+      tip.appendText(`${taskLabel(task)}${task.kind === 'jira' ? ` — ${task.title}` : ''}`);
+      tip.appendMarkdown(`\n\n${spent} today${state === 'idle' ? ' · idle, resumes on activity' : ''}`);
     }
     tip.appendMarkdown(`\n\n---\n\nToday total: **${formatDuration(report.totalMinutes)}**`);
     this.item.tooltip = tip;

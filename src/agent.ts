@@ -65,6 +65,11 @@ export async function connectAgent(serverPath: string): Promise<void> {
 }
 
 async function connectClaudeCode(serverPath: string): Promise<void> {
+  // The command runs through a shell; refuse paths that could break out of the quotes.
+  if (/["%$`!^&|<>\r\n]/.test(serverPath)) {
+    vscode.window.showErrorMessage(`Unsupported characters in the storage path: ${serverPath}`);
+    return;
+  }
   const quoted = `"${serverPath}"`;
   // Remove first so re-running updates the registration instead of failing on "already exists".
   await run(`claude mcp remove --scope user ${SERVER_NAME}`).catch(() => undefined);
@@ -84,10 +89,18 @@ async function connectClaudeCode(serverPath: string): Promise<void> {
 
   const commandsDir = path.join(os.homedir(), '.claude', 'commands');
   fs.mkdirSync(commandsDir, { recursive: true });
-  fs.writeFileSync(path.join(commandsDir, 'worklog.md'), WORKLOG_COMMAND);
+  const commandFile = path.join(commandsDir, 'worklog.md');
+  // Don't overwrite a /worklog command the user wrote themselves.
+  const existing = fs.existsSync(commandFile) ? fs.readFileSync(commandFile, 'utf8') : undefined;
+  const ours = existing === undefined || existing.includes('work-monitor MCP server');
+  if (ours) {
+    fs.writeFileSync(commandFile, WORKLOG_COMMAND);
+  }
 
   vscode.window.showInformationMessage(
-    'Claude Code connected. Start a new Claude session, then type /worklog or ask "update the work monitor description".',
+    ours
+      ? 'Claude Code connected. Start a new Claude session, then type /worklog or ask "update the work monitor description".'
+      : 'Claude Code connected. You already have your own /worklog command, so it was left unchanged — ask "update the work monitor description" instead.',
   );
 }
 

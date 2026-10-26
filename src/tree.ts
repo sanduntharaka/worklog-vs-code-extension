@@ -40,13 +40,16 @@ export class TodayTree implements vscode.TreeDataProvider<TaskRow>, vscode.Dispo
     item.description = `${formatDuration(row.minutes)} · ${row.start}–${row.end}`;
     item.iconPath = row.active
       ? new vscode.ThemeIcon('record', new vscode.ThemeColor('charts.green'))
-      : new vscode.ThemeIcon(ICONS[row.kind]);
+      : new vscode.ThemeIcon(ICONS[row.kind] ?? 'circle-outline');
     item.contextValue = row.kind === 'jira' ? 'jiraTask' : 'task';
+    // Titles and descriptions come from Jira, commits and agents: plain text, never markdown.
     const tip = new vscode.MarkdownString();
-    tip.appendMarkdown(`**${row.kind === 'jira' ? `${row.key} — ` : ''}${escape(row.title)}**\n\n`);
-    tip.appendMarkdown(`${row.start}–${row.end} · ${formatDuration(row.minutes)}${row.active ? ' · tracking now' : ''}\n\n`);
+    tip.appendText(`${row.kind === 'jira' ? `${row.key} — ` : ''}${row.title}`);
+    tip.appendMarkdown('\n\n');
+    tip.appendText(`${row.start}–${row.end} · ${formatDuration(row.minutes)}${row.active ? ' · tracking now' : ''}`);
     if (row.description) {
-      tip.appendMarkdown(escape(row.description));
+      tip.appendMarkdown('\n\n');
+      tip.appendText(row.description);
     }
     item.tooltip = tip;
     item.command = { command: 'workMonitor.openTimesheet', title: 'Open Timesheet' };
@@ -58,8 +61,4 @@ export class TodayTree implements vscode.TreeDataProvider<TaskRow>, vscode.Dispo
     this.view.dispose();
     this.emitter.dispose();
   }
-}
-
-function escape(text: string): string {
-  return text.replace(/[\\`*_{}[\]()#+\-.!|<>]/g, '\\$&');
 }

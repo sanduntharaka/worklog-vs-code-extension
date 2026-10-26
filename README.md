@@ -305,7 +305,7 @@ npm run compile                     # or: npm run watch
 
 ### Publishing a release
 
-[.github/workflows/release.yml](.github/workflows/release.yml) builds the `.vsix` and publishes it as a GitHub Release when you push a version tag.
+The workflow in `.github/workflows/release.yml` builds the `.vsix` and publishes it as a GitHub Release when you push a version tag.
 
 1. Bump `"version"` in `package.json`, for example `0.3.0`, and commit.
 2. Tag and push:
