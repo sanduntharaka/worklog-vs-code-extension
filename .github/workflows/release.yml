@@ -1,16 +1,18 @@
 name: Release
 
-# Builds the extension and publishes it as a GitHub Release with the .vsix attached:
-#   - push a tag like v0.3.0, or
-#   - Actions → Release → Run workflow (tags the commit as v<package.json version>).
-#     Untick "Publish a release" to only build; the .vsix is then kept as a run artifact.
+# Builds the extension on every push to main, and publishes a GitHub Release with the .vsix
+# attached whenever the version in package.json has not been released yet:
+#   bump "version" in package.json → push to main → release v<version> appears.
+# Pushes that keep the same version only build (the .vsix is kept as a run artifact).
+# Also: push a tag like v0.3.0, or Actions → Release → Run workflow.
 on:
   push:
+    branches: [main]
     tags: ['v*']
   workflow_dispatch:
     inputs:
       publish:
-        description: 'Publish a release (tag v<version from package.json>)'
+        description: 'Publish a release if this version is not released yet'
         type: boolean
         default: true
 
@@ -18,11 +20,18 @@ on:
 permissions:
   contents: read
 
+# Two quick pushes in a row: let them run one after another so the same release isn't created twice.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   build:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      released: ${{ steps.released.outputs.released }}
     steps:
       # Actions are pinned to commit SHAs (tags can be moved); the comment shows the version.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -46,16 +55,27 @@ jobs:
             echo "::error::package.json version '$VERSION' is not a valid semver version"
             exit 1
           fi
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            if [ "$GITHUB_REF_NAME" != "v$VERSION" ]; then
+              echo "::error::Tag $GITHUB_REF_NAME does not match package.json version $VERSION. Bump \"version\" in package.json or fix the tag."
+              exit 1
+            fi
+          fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
 
-      - name: Check tag matches package.json
-        if: github.ref_type == 'tag'
+      - name: Check whether this version is already released
+        id: released
         env:
-          VERSION: ${{ steps.version.outputs.version }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ steps.version.outputs.tag }}
         run: |
-          if [ "$GITHUB_REF_NAME" != "v$VERSION" ]; then
-            echo "::error::Tag $GITHUB_REF_NAME does not match package.json version $VERSION. Bump \"version\" in package.json or fix the tag."
-            exit 1
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "released=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::$TAG is already released — building only. Bump \"version\" in package.json to publish a new release."
+          else
+            echo "released=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Compile
@@ -76,7 +96,9 @@ jobs:
   release:
     # Separate job: only this one gets write access, and it runs no third-party code.
     needs: build
-    if: github.ref_type == 'tag' || inputs.publish == true
+    if: >-
+      needs.build.outputs.released == 'false' &&
+      (github.event_name == 'push' || inputs.publish == true)
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -90,14 +112,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           VERSION: ${{ needs.build.outputs.version }}
+          TAG: ${{ needs.build.outputs.tag }}
         run: |
           VSIX="work-monitor-$VERSION.vsix"
-          # Tag push: use that tag. Manual run: create the tag from package.json on this commit.
-          if [ "$GITHUB_REF_TYPE" = "tag" ]; then TAG="$GITHUB_REF_NAME"; else TAG="v$VERSION"; fi
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "::error::Release $TAG already exists. Bump \"version\" in package.json, commit, and run again."
-            exit 1
-          fi
           cat > notes.md <<EOF
           ## Install
 
@@ -107,6 +124,7 @@ jobs:
           3. Reload VS Code windows (**Developer: Reload Window**).
 
           EOF
+          # Creates the tag on this commit if it doesn't exist yet (pushes to main / manual runs).
           gh release create "$TAG" "$VSIX" \
             --target "$GITHUB_SHA" \
             --title "Work Monitor $TAG" \
