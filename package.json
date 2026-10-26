@@ -1,0 +1,271 @@
+{
+  "name": "work-monitor",
+  "displayName": "Work Monitor",
+  "description": "Automatic time tracking per task from your git branch, with a daily timesheet ready for Odoo.",
+  "version": "0.2.0",
+  "publisher": "sandun",
+  "license": "UNLICENSED",
+  "engines": {
+    "vscode": "^1.93.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "extensionDependencies": [
+    "vscode.git"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "workMonitor.openTimesheet",
+        "title": "Open Timesheet",
+        "category": "Work Monitor",
+        "icon": "$(table)"
+      },
+      {
+        "command": "workMonitor.startManualTask",
+        "title": "Start Non-Jira Task…",
+        "category": "Work Monitor",
+        "icon": "$(add)"
+      },
+      {
+        "command": "workMonitor.stopManualTask",
+        "title": "Stop Non-Jira Task",
+        "category": "Work Monitor",
+        "icon": "$(debug-stop)"
+      },
+      {
+        "command": "workMonitor.pause",
+        "title": "Pause Tracking",
+        "category": "Work Monitor",
+        "icon": "$(debug-pause)"
+      },
+      {
+        "command": "workMonitor.resume",
+        "title": "Resume Tracking",
+        "category": "Work Monitor",
+        "icon": "$(debug-start)"
+      },
+      {
+        "command": "workMonitor.addNote",
+        "title": "Add Note to Current Task…",
+        "category": "Work Monitor",
+        "icon": "$(comment)"
+      },
+      {
+        "command": "workMonitor.refresh",
+        "title": "Refresh",
+        "category": "Work Monitor",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "workMonitor.openInJira",
+        "title": "Open in Jira",
+        "category": "Work Monitor",
+        "icon": "$(link-external)"
+      },
+      {
+        "command": "workMonitor.connectJira",
+        "title": "Connect Jira…",
+        "category": "Work Monitor"
+      },
+      {
+        "command": "workMonitor.connectAgent",
+        "title": "Connect Coding Agent (Claude Code, Copilot…)…",
+        "category": "Work Monitor",
+        "icon": "$(sparkle)"
+      },
+      {
+        "command": "workMonitor.statusMenu",
+        "title": "Show Menu",
+        "category": "Work Monitor"
+      },
+      {
+        "command": "workMonitor.openDataFolder",
+        "title": "Open Data Folder",
+        "category": "Work Monitor"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "workMonitor",
+          "title": "Work Monitor",
+          "icon": "resources/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "workMonitor": [
+        {
+          "id": "workMonitor.today",
+          "name": "Today"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "workMonitor.today",
+        "contents": "Nothing tracked yet today.\nCheck out a branch like issue/TEST-101-… and start working — time is tracked automatically.\n[Start Non-Jira Task](command:workMonitor.startManualTask)\n[Open Timesheet](command:workMonitor.openTimesheet)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "workMonitor.openTimesheet",
+          "when": "view == workMonitor.today",
+          "group": "navigation@1"
+        },
+        {
+          "command": "workMonitor.startManualTask",
+          "when": "view == workMonitor.today && !workMonitor.manual",
+          "group": "navigation@2"
+        },
+        {
+          "command": "workMonitor.stopManualTask",
+          "when": "view == workMonitor.today && workMonitor.manual",
+          "group": "navigation@2"
+        },
+        {
+          "command": "workMonitor.pause",
+          "when": "view == workMonitor.today && !workMonitor.paused",
+          "group": "navigation@3"
+        },
+        {
+          "command": "workMonitor.resume",
+          "when": "view == workMonitor.today && workMonitor.paused",
+          "group": "navigation@3"
+        },
+        {
+          "command": "workMonitor.refresh",
+          "when": "view == workMonitor.today",
+          "group": "navigation@4"
+        },
+        {
+          "command": "workMonitor.connectJira",
+          "when": "view == workMonitor.today",
+          "group": "more@1"
+        },
+        {
+          "command": "workMonitor.connectAgent",
+          "when": "view == workMonitor.today",
+          "group": "more@2"
+        },
+        {
+          "command": "workMonitor.openDataFolder",
+          "when": "view == workMonitor.today",
+          "group": "more@3"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "workMonitor.openInJira",
+          "when": "view == workMonitor.today && viewItem == jiraTask",
+          "group": "inline"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "workMonitor.openInJira",
+          "when": "false"
+        },
+        {
+          "command": "workMonitor.statusMenu",
+          "when": "false"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Work Monitor",
+      "properties": {
+        "workMonitor.taskKeyPattern": {
+          "type": "string",
+          "default": "[A-Z][A-Z0-9]+-\\d+",
+          "description": "Regular expression that finds the Jira task key in a branch name or commit message."
+        },
+        "workMonitor.generalBranches": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "main",
+            "master",
+            "develop",
+            "dev",
+            "staging"
+          ],
+          "description": "Branches that are not a task. Time on them is logged as \"General\" (or not at all, see trackGeneralBranches)."
+        },
+        "workMonitor.trackGeneralBranches": {
+          "type": "boolean",
+          "default": true,
+          "description": "Log time spent on general branches (main, develop…) as a \"General\" entry."
+        },
+        "workMonitor.autoStart": {
+          "type": "boolean",
+          "default": true,
+          "description": "Start tracking automatically when you switch to a task branch. When off, you are asked first."
+        },
+        "workMonitor.idleMinutes": {
+          "type": "number",
+          "default": 10,
+          "minimum": 1,
+          "description": "Stop counting time after this many minutes without any activity (typing, file changes by agents, terminal commands…)."
+        },
+        "workMonitor.manualTaskPresets": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "Check issues",
+            "Refer docs",
+            "Meeting",
+            "Code review",
+            "Support"
+          ],
+          "description": "Quick choices offered when starting a non-Jira task."
+        },
+        "workMonitor.reminderTime": {
+          "type": "string",
+          "default": "17:30",
+          "pattern": "^(([01]\\d|2[0-3]):[0-5]\\d)?$",
+          "description": "Time (HH:mm) to remind you to fill the timesheet. Leave empty to disable."
+        },
+        "workMonitor.roundToMinutes": {
+          "type": "number",
+          "default": 0,
+          "enum": [
+            0,
+            5,
+            10,
+            15,
+            30
+          ],
+          "description": "Round task durations in the timesheet (0 = no rounding)."
+        },
+        "workMonitor.jira.baseUrl": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Your Jira Cloud site, e.g. `https://your-company.atlassian.net`. Run **Work Monitor: Connect Jira…** to add your API token."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package --allow-missing-repository --skip-license"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "~1.93.0",
+    "@vscode/vsce": "^4.0.0",
+    "typescript": "^5.6.0"
+  }
+}
