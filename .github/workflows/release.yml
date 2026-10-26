@@ -1,11 +1,18 @@
 name: Release
 
-# Push a tag like v0.3.0 to build the extension and publish it as a GitHub Release
-# with the .vsix attached. "Run workflow" (manual) only builds and keeps the .vsix as an artifact.
+# Builds the extension and publishes it as a GitHub Release with the .vsix attached:
+#   - push a tag like v0.3.0, or
+#   - Actions → Release → Run workflow (tags the commit as v<package.json version>).
+#     Untick "Publish a release" to only build; the .vsix is then kept as a run artifact.
 on:
   push:
     tags: ['v*']
   workflow_dispatch:
+    inputs:
+      publish:
+        description: 'Publish a release (tag v<version from package.json>)'
+        type: boolean
+        default: true
 
 # Least privilege: read-only by default, write only where the release is created.
 permissions:
@@ -69,7 +76,7 @@ jobs:
   release:
     # Separate job: only this one gets write access, and it runs no third-party code.
     needs: build
-    if: github.ref_type == 'tag'
+    if: github.ref_type == 'tag' || inputs.publish == true
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -85,6 +92,12 @@ jobs:
           VERSION: ${{ needs.build.outputs.version }}
         run: |
           VSIX="work-monitor-$VERSION.vsix"
+          # Tag push: use that tag. Manual run: create the tag from package.json on this commit.
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then TAG="$GITHUB_REF_NAME"; else TAG="v$VERSION"; fi
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "::error::Release $TAG already exists. Bump \"version\" in package.json, commit, and run again."
+            exit 1
+          fi
           cat > notes.md <<EOF
           ## Install
 
@@ -94,7 +107,8 @@ jobs:
           3. Reload VS Code windows (**Developer: Reload Window**).
 
           EOF
-          gh release create "$GITHUB_REF_NAME" "$VSIX" \
-            --title "Work Monitor $GITHUB_REF_NAME" \
+          gh release create "$TAG" "$VSIX" \
+            --target "$GITHUB_SHA" \
+            --title "Work Monitor $TAG" \
             --notes-file notes.md \
             --generate-notes

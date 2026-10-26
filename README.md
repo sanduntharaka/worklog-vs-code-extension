@@ -305,19 +305,21 @@ npm run compile                     # or: npm run watch
 
 ### Publishing a release
 
-The workflow in `.github/workflows/release.yml` builds the `.vsix` and publishes it as a GitHub Release when you push a version tag.
+The workflow in `.github/workflows/release.yml` builds the `.vsix` and publishes it as a GitHub Release.
 
-1. Bump `"version"` in `package.json`, for example `0.3.0`, and commit.
-2. Tag and push:
+1. Bump `"version"` in `package.json`, for example `0.3.0`, then commit and push.
+2. Start the release in one of two ways:
+   - **From GitHub:** **Actions → Release → Run workflow** (keep **Publish a release** ticked) → **Run workflow**. It tags the commit as `v0.3.0` for you.
+   - **From the terminal:**
 
-   ```bash
-   git tag v0.3.0
-   git push origin main --tags
-   ```
+     ```bash
+     git tag v0.3.0
+     git push origin v0.3.0
+     ```
 
-3. Wait for the **Release** workflow in the **Actions** tab to finish (about a minute). The release **Work Monitor v0.3.0** then appears under **Releases**, with `work-monitor-0.3.0.vsix` attached and install instructions.
+3. Wait for the workflow to finish (about a minute). The release **Work Monitor v0.3.0** then appears under **Releases**, with `work-monitor-0.3.0.vsix` attached and install instructions.
 
-The tag must match `package.json` (`v` + version), otherwise the workflow stops with an error. **Actions → Release → Run workflow** builds the `.vsix` without publishing a release; you can download it from the run's **Artifacts**.
+A version can only be released once, so bump the version for every release. A pushed tag must match `package.json` (`v` + version). To only build, without publishing, untick **Publish a release**. The `.vsix` is then under the run's **Artifacts**.
 
 ### Project layout
 
