@@ -5,11 +5,18 @@ export interface Config {
   generalBranches: string[];
   trackGeneralBranches: boolean;
   autoStart: boolean;
+  /** Track only branches made with "Create Task Branch" (or added with "Track This Branch"). */
+  trackOnlyCreatedBranches: boolean;
   idleMs: number;
   manualTaskPresets: string[];
   reminderTime: string;
   roundToMinutes: number;
   jiraBaseUrl: string;
+  projects: string[];
+  progressReminderMs: number;
+  remindOnTaskSwitch: boolean;
+  /** Away this long while a non-Jira timer runs = a break (lunch…), left out unless confirmed. 0 = off. */
+  breakMs: number;
 }
 
 /**
@@ -34,10 +41,15 @@ export function getConfig(): Config {
     generalBranches: c.get<string[]>('generalBranches', ['main', 'master', 'develop']),
     trackGeneralBranches: c.get<boolean>('trackGeneralBranches', true),
     autoStart: c.get<boolean>('autoStart', true),
+    trackOnlyCreatedBranches: c.get<boolean>('trackOnlyCreatedBranches', true),
     idleMs: Math.max(1, c.get<number>('idleMinutes', 10)) * 60_000,
     manualTaskPresets: c.get<string[]>('manualTaskPresets', []),
     reminderTime: c.get<string>('reminderTime', '17:30'),
-    roundToMinutes: c.get<number>('roundToMinutes', 0),
+    roundToMinutes: c.get<number>('roundToMinutes', 15),
     jiraBaseUrl: userJiraBaseUrl(c),
+    projects: c.get<string[]>('projects', []).map(p => p.trim()).filter(Boolean),
+    progressReminderMs: Math.max(0, c.get<number>('progressReminderHours', 2)) * 3_600_000,
+    remindOnTaskSwitch: c.get<boolean>('remindOnTaskSwitch', true),
+    breakMs: Math.max(0, c.get<number>('breakMinutes', 30)) * 60_000,
   };
 }

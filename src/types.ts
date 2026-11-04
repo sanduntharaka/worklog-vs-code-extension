@@ -46,9 +46,20 @@ export interface RowOverride {
   description?: string;
   /** Set when a coding agent wrote the description; cleared when you edit it. */
   descriptionBy?: 'agent';
+  /** Odoo project name. */
+  project?: string;
+  /** Minutes already entered in Odoo (entries are logged progressively during the day). */
+  loggedMinutes?: number;
   hidden?: boolean;
   /** Row created by hand in the timesheet, not from tracking. */
   added?: boolean;
 }
 
 export type DayOverrides = Record<string, RowOverride>;
+
+/** Odoo projects chosen before, used to suggest the project for new entries. */
+export interface ProjectMemory {
+  byTask: Record<string, string>;
+  byRepo: Record<string, string>;
+  recent: string[];
+}

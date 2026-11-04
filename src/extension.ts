@@ -5,8 +5,9 @@ import { GitWatcher } from './git';
 import { Jira } from './jira';
 import { StatusBar } from './statusBar';
 import { Store } from './store';
-import { taskFromText, taskLabel } from './tasks';
-import { hhmm, today } from './time';
+import { taskBranchName, taskFromText, taskLabel } from './tasks';
+import { buildDay } from './report';
+import { dayKey, formatHHMM, hhmm, today } from './time';
 import { TimesheetPanel } from './timesheet';
 import { Tracker } from './tracker';
 import { TodayTree } from './tree';
@@ -14,6 +15,7 @@ import { TaskInfo } from './types';
 
 const RECENT_MANUAL_KEY = 'workMonitor.recentManual';
 const LAST_REMINDER_KEY = 'workMonitor.lastReminder';
+const LAST_PROGRESS_KEY = 'workMonitor.lastProgressReminder';
 
 let tracker: Tracker | undefined;
 
@@ -62,6 +64,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     status,
     tree,
     vscode.commands.registerCommand('workMonitor.openTimesheet', openTimesheet),
+    vscode.commands.registerCommand('workMonitor.createTaskBranch', () => createTaskBranch(git, t, store, jira)),
+    vscode.commands.registerCommand('workMonitor.trackBranch', () => {
+      const repo = git.currentRepo();
+      const branch = t.trackableBranch;
+      if (repo && branch) {
+        t.trackBranch(repo, branch);
+      }
+    }),
     vscode.commands.registerCommand('workMonitor.startManualTask', () => startManualTask(context, t)),
     vscode.commands.registerCommand('workMonitor.stopManualTask', () => t.stopManual()),
     vscode.commands.registerCommand('workMonitor.pause', () => t.setPaused(true)),
@@ -88,7 +98,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand('workMonitor.openDataFolder', () =>
       vscode.env.openExternal(context.globalStorageUri),
     ),
-    startReminder(context, openTimesheet),
+    startReminders(context, store, t, openTimesheet),
   );
 }
 
@@ -96,6 +106,67 @@ export function deactivate(): void {
   // Close the open segment and write it before the window goes away.
   tracker?.dispose();
   tracker = undefined;
+}
+
+/** Ask for the task ID and name, then create (or reuse) issue/<ID>-<name> and track it. */
+async function createTaskBranch(git: GitWatcher, tracker: Tracker, store: Store, jira: Jira): Promise<void> {
+  const repo = git.currentRepo();
+  if (!repo) {
+    vscode.window.showWarningMessage('Open a folder that is a git repository to create a task branch.');
+    return;
+  }
+  const keyPattern = new RegExp(`^(?:${getConfig().taskKeyPattern.source})$`);
+  const input = await vscode.window.showInputBox({
+    title: 'Create task branch (1/2)',
+    prompt: 'Task ID',
+    placeHolder: 'TEST-101',
+    ignoreFocusOut: true,
+    validateInput: v => (keyPattern.test(v.trim().toUpperCase()) ? undefined : 'Enter a task ID such as TEST-101'),
+  });
+  if (!input) {
+    return;
+  }
+  const key = input.trim().toUpperCase();
+
+  const knownTitle =
+    store.getTitle(key) ??
+    (await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Window, title: `Looking up ${key} in Jira` },
+      () => jira.fetchTitle(key),
+    ));
+  const name = await vscode.window.showInputBox({
+    title: 'Create task branch (2/2)',
+    prompt: `Task name. The branch starts from ${repo.state.HEAD?.name ?? 'the current commit'}.`,
+    value: knownTitle,
+    placeHolder: 'Add date filter to orders list',
+    ignoreFocusOut: true,
+    validateInput: v =>
+      v.trim()
+        ? { message: `Branch: ${taskBranchName(key, v)}`, severity: vscode.InputBoxValidationSeverity.Info }
+        : 'Enter the task name',
+  });
+  if (!name?.trim()) {
+    return;
+  }
+
+  const branch = taskBranchName(key, name);
+  try {
+    const exists = await repo.getBranch(branch).then(
+      () => true,
+      () => false,
+    );
+    if (exists) {
+      await repo.checkout(branch);
+    } else {
+      await repo.createBranch(branch, true);
+    }
+  } catch (e) {
+    vscode.window.showErrorMessage(`Could not switch to ${branch}: ${(e as Error).message}`);
+    return;
+  }
+  store.setTitle(key, name.trim());
+  tracker.trackBranch(repo, branch);
+  vscode.window.setStatusBarMessage(`$(git-branch) On ${branch} — tracking ${key}`, 4000);
 }
 
 async function startManualTask(context: vscode.ExtensionContext, tracker: Tracker): Promise<void> {
@@ -153,6 +224,10 @@ async function statusMenu(tracker: Tracker, jira: Jira): Promise<void> {
     items.push({ label: taskLabel(task), description: task.kind === 'jira' ? task.title : undefined, kind: vscode.QuickPickItemKind.Separator });
   }
   items.push({ label: '$(table) Open Timesheet', run: () => vscode.commands.executeCommand('workMonitor.openTimesheet') });
+  items.push({ label: '$(git-branch) Create Task Branch…', description: 'issue/<ID>-<task-name>', run: () => vscode.commands.executeCommand('workMonitor.createTaskBranch') });
+  if (tracker.trackableBranch) {
+    items.push({ label: '$(eye) Track This Branch', description: tracker.trackableBranch, run: () => vscode.commands.executeCommand('workMonitor.trackBranch') });
+  }
   if (tracker.isManual) {
     items.push({ label: '$(debug-stop) Stop Non-Jira Task', description: task?.title, run: () => tracker.stopManual() });
   }
@@ -173,24 +248,73 @@ async function statusMenu(tracker: Tracker, jira: Jira): Promise<void> {
   await choice?.run?.();
 }
 
-/** Once a day at `reminderTime`, offer to open the timesheet. */
-function startReminder(context: vscode.ExtensionContext, openTimesheet: () => void): vscode.Disposable {
-  const check = async () => {
-    const at = getConfig().reminderTime;
-    if (!at || hhmm(Date.now()) < at || context.globalState.get(LAST_REMINDER_KEY) === today()) {
-      return;
-    }
-    // globalState is shared by all windows, so only one of them shows the reminder.
-    await context.globalState.update(LAST_REMINDER_KEY, today());
-    const choice = await vscode.window.showInformationMessage(
-      'Time to fill your timesheet. Today\'s tasks are ready.',
-      'Open Timesheet',
-      'Later',
-    );
+/**
+ * The Odoo procedure asks for timesheets to be updated several times a day, so remind:
+ * - when you move to another task and the previous one has unlogged time,
+ * - every `progressReminderHours` while time is unlogged,
+ * - once at `reminderTime` for the final check.
+ * globalState is shared by all windows, so only one window shows each timed reminder.
+ */
+function startReminders(
+  context: vscode.ExtensionContext,
+  store: Store,
+  tracker: Tracker,
+  openTimesheet: () => void,
+): vscode.Disposable {
+  const MIN_TO_REMIND = 15;
+  const report = () => buildDay(store, today(), undefined, getConfig().roundToMinutes);
+  const notify = async (message: string) => {
+    const choice = await vscode.window.showInformationMessage(message, 'Open Timesheet', 'Later');
     if (choice === 'Open Timesheet') {
       openTimesheet();
     }
   };
+
+  const lastSwitchReminder = new Map<string, number>();
+  const onSwitch = tracker.onDidSwitchTask(key => {
+    if (!getConfig().remindOnTaskSwitch || Date.now() - (lastSwitchReminder.get(key) ?? 0) < 30 * 60_000) {
+      return;
+    }
+    const row = report().rows.find(r => r.key === key && !r.hidden);
+    if (row && row.toLogMinutes >= MIN_TO_REMIND) {
+      lastSwitchReminder.set(key, Date.now());
+      void notify(`${row.label}: ${formatHHMM(row.toLogMinutes)} not logged in Odoo yet. Log it now while it's fresh?`);
+    }
+  });
+
+  const check = async () => {
+    const cfg = getConfig();
+    const now = Date.now();
+
+    if (cfg.reminderTime && hhmm(now) >= cfg.reminderTime && context.globalState.get(LAST_REMINDER_KEY) !== today()) {
+      await context.globalState.update(LAST_REMINDER_KEY, today());
+      const r = report();
+      const failing = r.checks.filter(c => !c.ok);
+      void notify(
+        failing.length
+          ? `Final timesheet check: ${failing.map(c => c.detail ?? c.label).join(', ')}.`
+          : 'Final timesheet check: everything is logged and ready. ✓',
+      );
+      return;
+    }
+
+    if (cfg.progressReminderMs > 0) {
+      const last = context.globalState.get<number>(LAST_PROGRESS_KEY, 0);
+      if (dayKey(last) !== today()) {
+        // First check of the day starts the clock.
+        await context.globalState.update(LAST_PROGRESS_KEY, now);
+      } else if (now - last >= cfg.progressReminderMs) {
+        await context.globalState.update(LAST_PROGRESS_KEY, now);
+        const toLog = report().toLogMinutes;
+        if (toLog >= MIN_TO_REMIND) {
+          void notify(`${formatHHMM(toLog)} of today's work isn't in Odoo yet. Update your timesheet?`);
+        }
+      }
+    }
+  };
   const timer = setInterval(check, 60_000);
-  return new vscode.Disposable(() => clearInterval(timer));
+  return new vscode.Disposable(() => {
+    clearInterval(timer);
+    onSwitch.dispose();
+  });
 }

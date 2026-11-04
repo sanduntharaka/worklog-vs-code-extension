@@ -21,6 +21,10 @@ export interface Repository {
   };
   getCommit(ref: string): Promise<Commit>;
   getConfig(key: string): Promise<string>;
+  /** Rejects when the branch doesn't exist. */
+  getBranch(name: string): Promise<unknown>;
+  createBranch(name: string, checkout: boolean, ref?: string): Promise<void>;
+  checkout(treeish: string): Promise<void>;
 }
 
 export interface Commit {

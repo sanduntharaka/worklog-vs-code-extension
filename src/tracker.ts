@@ -1,11 +1,11 @@
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { getConfig } from './config';
-import { GitWatcher, NewCommit } from './git';
+import { GitWatcher, NewCommit, Repository } from './git';
 import { Jira } from './jira';
 import { Store } from './store';
 import { taskFromBranch, taskLabel } from './tasks';
-import { dayKey, endOfDay, startOfDay } from './time';
+import { dayKey, endOfDay, formatDuration, startOfDay } from './time';
 import { Segment, TaskInfo } from './types';
 
 const TICK_MS = 30_000;
@@ -17,6 +17,8 @@ export type TrackerState = 'tracking' | 'idle' | 'paused' | 'off';
 /**
  * Decides which task this window is working on and records segments of activity for it.
  *
+ * - Only branches made with "Create Task Branch" or added with "Track This Branch" are tracked
+ *   (unless `trackOnlyCreatedBranches` is off).
  * - Branch tasks count only while there is activity; after `idleMinutes` of silence the
  *   segment is closed at the last activity.
  * - Non-Jira (manual) tasks run from start to stop, because that work often happens
@@ -26,12 +28,18 @@ export class Tracker implements vscode.Disposable {
   private paused = false;
   private manual: TaskInfo | undefined;
   private branchTask: TaskInfo | undefined;
+  private untrackedBranch: string | undefined;
   private where: { repo?: string; branch?: string } = {};
   private readonly confirmed = new Set<string>();
   private segment: Segment | undefined;
   private segmentTask: TaskInfo | undefined;
   private lastActivity = 0;
   private lastSignature = '';
+  private lastTaskKey: string | undefined;
+  private readonly switchEmitter = new vscode.EventEmitter<string>();
+
+  /** Fires with the previous task's key when work moves on to another task. */
+  readonly onDidSwitchTask = this.switchEmitter.event;
   private readonly timer: NodeJS.Timeout;
   private readonly disposables: vscode.Disposable[] = [];
   private readonly emitter = new vscode.EventEmitter<void>();
@@ -127,6 +135,7 @@ export class Tracker implements vscode.Disposable {
   startManual(task: TaskInfo): void {
     this.manual = task;
     this.paused = false;
+    this.lastActivity = Date.now();
     this.sync(Date.now());
   }
 
@@ -154,11 +163,41 @@ export class Tracker implements vscode.Disposable {
     return true;
   }
 
+  /** The current branch, if it has a task key but isn't being tracked yet. */
+  get trackableBranch(): string | undefined {
+    return this.untrackedBranch;
+  }
+
+  /** Register a branch for tracking and start tracking it if it's the current one. */
+  trackBranch(repo: Repository, branch: string): void {
+    this.store.addTrackedBranch(repo.rootUri.fsPath, branch);
+    const task = taskFromBranch(branch, getConfig());
+    if (task) {
+      this.confirmed.add(task.key);
+    }
+    this.lastActivity = Date.now();
+    this.refreshTask();
+  }
+
+  /** The task a repository's current branch counts towards, if that branch is tracked. */
+  private branchTaskFor(repo: Repository | undefined): TaskInfo | undefined {
+    const branch = repo?.state.HEAD?.name;
+    if (!repo || !branch) {
+      return undefined;
+    }
+    const cfg = getConfig();
+    if (cfg.trackOnlyCreatedBranches && !this.store.isTrackedBranch(repo.rootUri.fsPath, branch)) {
+      return undefined;
+    }
+    return taskFromBranch(branch, cfg);
+  }
+
   private refreshTask(): void {
     const cfg = getConfig();
     const repo = this.git.currentRepo();
     const branch = repo?.state.HEAD?.name;
-    const next = branch ? taskFromBranch(branch, cfg) : undefined;
+    const next = this.branchTaskFor(repo);
+    this.untrackedBranch = !next && branch && taskFromBranch(branch, cfg)?.kind === 'jira' ? branch : undefined;
     if (next?.kind === 'jira') {
       const known = this.store.getTitle(next.key);
       if (known) {
@@ -190,6 +229,10 @@ export class Tracker implements vscode.Disposable {
 
   private markActivity(): void {
     const now = Date.now();
+    const breakMs = getConfig().breakMs;
+    if (this.segment && this.isManualSegment() && breakMs > 0 && this.lastActivity > 0 && now - this.lastActivity >= breakMs) {
+      this.leaveOutBreak(this.lastActivity, now);
+    }
     this.lastActivity = now;
     if (this.segment) {
       if (!this.isManualSegment()) {
@@ -201,12 +244,41 @@ export class Tracker implements vscode.Disposable {
     }
   }
 
+  /**
+   * Non-Jira timers keep running when VS Code is idle (meetings, reading docs), but a long absence
+   * is usually a break, and breaks must not go on the timesheet: leave it out unless the user says otherwise.
+   */
+  private leaveOutBreak(from: number, to: number): void {
+    const before = this.segment!;
+    const task = this.segmentTask!;
+    this.close(from);
+    this.open(task, to);
+    this.store.flush();
+    void vscode.window
+      .showInformationMessage(
+        `You were away ${formatDuration((to - from) / 60_000)} while "${taskLabel(task)}" was running, so that time was left out of the timesheet (breaks aren't recorded).`,
+        'I Was Working — Keep It',
+      )
+      .then(choice => {
+        if (choice) {
+          before.end = to;
+          this.store.touch(before);
+          this.store.flush();
+          this.changed(true);
+        }
+      });
+  }
+
   /** Make the open segment match the current task. */
   private sync(now: number): void {
     const task = this.task;
     if (this.segment && this.segmentTask?.key !== task?.key) {
       this.close(now);
     }
+    if (task && this.lastTaskKey && task.key !== this.lastTaskKey) {
+      this.switchEmitter.fire(this.lastTaskKey);
+    }
+    this.lastTaskKey = task?.key ?? this.lastTaskKey;
     if (!this.segment && task && (task === this.manual || now - this.lastActivity < getConfig().idleMs)) {
       this.open(task, now);
     }
@@ -244,16 +316,16 @@ export class Tracker implements vscode.Disposable {
     }
   }
 
-  private onCommit({ commit }: NewCommit): void {
+  private onCommit({ repo, commit }: NewCommit): void {
     const cfg = getConfig();
+    let task = this.branchTaskFor(repo);
+    if (!task) {
+      return; // Commits on untracked branches don't go on the timesheet.
+    }
     const firstLine = commit.message.split('\n')[0].trim();
     const keyInMessage = cfg.taskKeyPattern.exec(firstLine)?.[0];
-    let task: TaskInfo | undefined = this.branchTask ?? this.task;
-    if (keyInMessage && keyInMessage !== task?.key) {
+    if (keyInMessage && keyInMessage !== task.key) {
       task = { key: keyInMessage, title: this.store.getTitle(keyInMessage) ?? keyInMessage, kind: 'jira' };
-    }
-    if (!task) {
-      return;
     }
     const time = (commit.commitDate ?? commit.authorDate)?.getTime() ?? Date.now();
     this.store.addCommit(task, { hash: commit.hash, message: firstLine, time });
@@ -284,7 +356,7 @@ export class Tracker implements vscode.Disposable {
 
   /** Notify listeners; without `force`, only when the visible state actually changed. */
   private changed(force = false): void {
-    const signature = `${this.state}|${this.task?.key}|${this.task?.title}|${this.paused}|${!!this.manual}`;
+    const signature = `${this.state}|${this.task?.key}|${this.task?.title}|${this.paused}|${!!this.manual}|${this.untrackedBranch}`;
     if (!force && signature === this.lastSignature) {
       return;
     }
@@ -296,6 +368,7 @@ export class Tracker implements vscode.Disposable {
   private updateContext(): void {
     void vscode.commands.executeCommand('setContext', 'workMonitor.paused', this.paused);
     void vscode.commands.executeCommand('setContext', 'workMonitor.manual', !!this.manual);
+    void vscode.commands.executeCommand('setContext', 'workMonitor.canTrackBranch', !!this.untrackedBranch);
   }
 
   dispose(): void {
@@ -304,5 +377,6 @@ export class Tracker implements vscode.Disposable {
     this.store.flush();
     this.disposables.forEach(d => d.dispose());
     this.emitter.dispose();
+    this.switchEmitter.dispose();
   }
 }

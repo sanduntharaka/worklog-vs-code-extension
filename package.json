@@ -2,7 +2,7 @@
   "name": "work-monitor",
   "displayName": "Work Monitor",
   "description": "Automatic time tracking per task from your git branch, with a daily timesheet ready for Odoo.",
-  "version": "0.2.1",
+  "version": "0.4.0",
   "publisher": "sandun",
   "license": "UNLICENSED",
   "engines": {
@@ -26,6 +26,18 @@
   },
   "contributes": {
     "commands": [
+      {
+        "command": "workMonitor.createTaskBranch",
+        "title": "Create Task Branch…",
+        "category": "Work Monitor",
+        "icon": "$(git-branch)"
+      },
+      {
+        "command": "workMonitor.trackBranch",
+        "title": "Track This Branch",
+        "category": "Work Monitor",
+        "icon": "$(eye)"
+      },
       {
         "command": "workMonitor.openTimesheet",
         "title": "Open Timesheet",
@@ -116,11 +128,16 @@
     "viewsWelcome": [
       {
         "view": "workMonitor.today",
-        "contents": "Nothing tracked yet today.\nCheck out a branch like issue/TEST-101-… and start working — time is tracked automatically.\n[Start Non-Jira Task](command:workMonitor.startManualTask)\n[Open Timesheet](command:workMonitor.openTimesheet)"
+        "contents": "Nothing tracked yet today.\nCreate a task branch (issue/TEST-101-…) and start working — time is tracked automatically.\n[Create Task Branch](command:workMonitor.createTaskBranch)\n[Start Non-Jira Task](command:workMonitor.startManualTask)\n[Open Timesheet](command:workMonitor.openTimesheet)"
       }
     ],
     "menus": {
       "view/title": [
+        {
+          "command": "workMonitor.createTaskBranch",
+          "when": "view == workMonitor.today",
+          "group": "navigation@0"
+        },
         {
           "command": "workMonitor.openTimesheet",
           "when": "view == workMonitor.today",
@@ -182,6 +199,10 @@
         {
           "command": "workMonitor.statusMenu",
           "when": "false"
+        },
+        {
+          "command": "workMonitor.trackBranch",
+          "when": "workMonitor.canTrackBranch"
         }
       ]
     },
@@ -193,6 +214,11 @@
           "default": "[A-Z][A-Z0-9]+-\\d+",
           "scope": "application",
           "description": "Regular expression that finds the Jira task key in a branch name or commit message."
+        },
+        "workMonitor.trackOnlyCreatedBranches": {
+          "type": "boolean",
+          "default": true,
+          "description": "Track only branches made with \"Create Task Branch\" or added with \"Track This Branch\". Turn off to track every branch you check out."
         },
         "workMonitor.generalBranches": {
           "type": "array",
@@ -206,12 +232,12 @@
             "dev",
             "staging"
           ],
-          "description": "Branches that are not a task. Time on them is logged as \"General\" (or not at all, see trackGeneralBranches)."
+          "description": "Branches that are not a task. Only used when trackOnlyCreatedBranches is off: time on them is logged as \"General\" (or not at all, see trackGeneralBranches)."
         },
         "workMonitor.trackGeneralBranches": {
           "type": "boolean",
           "default": true,
-          "description": "Log time spent on general branches (main, develop…) as a \"General\" entry."
+          "description": "Only used when trackOnlyCreatedBranches is off: log time on general branches (main, develop…) as a \"General\" entry."
         },
         "workMonitor.autoStart": {
           "type": "boolean",
@@ -242,11 +268,11 @@
           "type": "string",
           "default": "17:30",
           "pattern": "^(([01]\\d|2[0-3]):[0-5]\\d)?$",
-          "description": "Time (HH:mm) to remind you to fill the timesheet. Leave empty to disable."
+          "description": "Time (HH:mm) for the end-of-day final timesheet check. Leave empty to disable."
         },
         "workMonitor.roundToMinutes": {
           "type": "number",
-          "default": 0,
+          "default": 15,
           "enum": [
             0,
             5,
@@ -254,7 +280,32 @@
             15,
             30
           ],
-          "description": "Round task durations in the timesheet (0 = no rounding)."
+          "description": "Round each entry's Time Spent to the nearest step (the Odoo procedure uses 15 minutes: 22 min → 00:15, 27 min → 00:30). 0 = no rounding."
+        },
+        "workMonitor.projects": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Odoo project names offered in the timesheet's Project field. Projects you type are also remembered and suggested again for the same task and repository."
+        },
+        "workMonitor.progressReminderHours": {
+          "type": "number",
+          "default": 2,
+          "minimum": 0,
+          "description": "Remind you to update the timesheet every N hours while time is not logged in Odoo yet (0 = off). Timesheets must be updated several times a day."
+        },
+        "workMonitor.remindOnTaskSwitch": {
+          "type": "boolean",
+          "default": true,
+          "description": "When you move to another task, remind you if the previous one has time not logged in Odoo yet."
+        },
+        "workMonitor.breakMinutes": {
+          "type": "number",
+          "default": 30,
+          "minimum": 0,
+          "description": "While a non-Jira timer runs, an absence from VS Code this long counts as a break (lunch…) and is left out of the timesheet unless you confirm you were working (0 = off)."
         },
         "workMonitor.jira.baseUrl": {
           "type": "string",

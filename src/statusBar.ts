@@ -31,7 +31,13 @@ export class StatusBar implements vscode.Disposable {
       tip.appendMarkdown('**Tracking paused.** Click to resume.');
     } else if (!task) {
       this.item.text = '$(clock) Not tracking';
-      tip.appendMarkdown('No task detected. Check out a task branch or start a non-Jira task.');
+      const untracked = this.tracker.trackableBranch;
+      if (untracked) {
+        tip.appendText(`Branch ${untracked} isn't tracked.`);
+        tip.appendMarkdown(' Click and choose **Track This Branch** to count it.');
+      } else {
+        tip.appendMarkdown('No task branch here. Click to create a task branch or start a non-Jira task.');
+      }
     } else {
       const icon = state === 'tracking' ? '$(record)' : '$(clock)';
       this.item.text = `${icon} ${taskLabel(task)} · ${spent}${state === 'idle' ? ' (idle)' : ''}`;

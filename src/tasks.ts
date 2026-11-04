@@ -3,6 +3,8 @@ import { TaskInfo } from './types';
 
 export const GENERAL_TASK: TaskInfo = { key: 'general', title: 'General (no task branch)', kind: 'general' };
 
+const MAX_SLUG = 60;
+
 /**
  * issue/TEST-101-add-date-filter-to-orders-list
  *   → { key: 'TEST-101', title: 'Add date filter to orders list', kind: 'jira' }
@@ -19,6 +21,19 @@ export function taskFromBranch(branch: string, cfg: Config): TaskInfo | undefine
     return { key, title: slugToTitle(slug) || key, kind: 'jira' };
   }
   return { key: `branch:${branch}`, title: branch, kind: 'branch' };
+}
+
+/** ("TEST-101", "Add date filter to orders list") → "issue/TEST-101-add-date-filter-to-orders-list" */
+export function taskBranchName(key: string, name: string): string {
+  const slug = name
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  // Keep branch names manageable, cutting at a word boundary.
+  const short = slug.length > MAX_SLUG ? slug.slice(0, MAX_SLUG).replace(/-[^-]*$/, '') : slug;
+  return `issue/${key}${short ? `-${short}` : ''}`;
 }
 
 /** "Check issues" → manual task; "TEST-102 code review" → that Jira task. */

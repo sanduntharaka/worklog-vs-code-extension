@@ -68,27 +68,36 @@ export class Jira implements vscode.Disposable {
     if (this.pending.has(key) || this.store.getTitle(key)) {
       return;
     }
+    this.pending.add(key);
+    try {
+      const title = await this.fetchTitle(key);
+      if (title) {
+        this.store.setTitle(key, title);
+        this.titleEmitter.fire({ key, title });
+      }
+    } finally {
+      this.pending.delete(key);
+    }
+  }
+
+  /** The issue summary, or undefined when Jira isn't connected or can't be reached. */
+  async fetchTitle(key: string): Promise<string | undefined> {
     const base = getConfig().jiraBaseUrl;
     const email = await this.secrets.get(EMAIL_KEY);
     const token = await this.secrets.get(TOKEN_KEY);
     if (!base || !email || !token) {
-      return;
+      return undefined;
     }
-    this.pending.add(key);
     try {
       const res = await this.request(base, `/rest/api/3/issue/${encodeURIComponent(key)}?fields=summary`, email, token);
-      if (res.ok) {
-        const issue = (await res.json()) as { fields?: { summary?: string } };
-        const title = issue.fields?.summary;
-        if (title) {
-          this.store.setTitle(key, title);
-          this.titleEmitter.fire({ key, title });
-        }
+      if (!res.ok) {
+        return undefined;
       }
+      const issue = (await res.json()) as { fields?: { summary?: string } };
+      return issue.fields?.summary;
     } catch {
-      // Offline or Jira unreachable; the branch-derived title is used meanwhile.
-    } finally {
-      this.pending.delete(key);
+      // Offline or Jira unreachable; callers fall back to a title typed or taken from the branch.
+      return undefined;
     }
   }
 
@@ -103,6 +112,7 @@ export class Jira implements vscode.Disposable {
       },
       // Never carry the credentials along a redirect to another host.
       redirect: 'error',
+      signal: AbortSignal.timeout(10_000),
     });
   }
 

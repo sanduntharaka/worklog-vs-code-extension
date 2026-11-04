@@ -53,9 +53,16 @@ export function formatDate(date: string): string {
   });
 }
 
+/** Round to the nearest step (22 → 15, 27 → 30); never rounds up just because time is short. */
 export function roundMinutes(minutes: number, step: number): number {
   if (step <= 0) {
     return Math.round(minutes);
   }
-  return Math.max(step, Math.round(minutes / step) * step);
+  return Math.round(minutes / step) * step;
+}
+
+/** Odoo's "Time Spent" format: 75 → "01:15". */
+export function formatHHMM(minutes: number): string {
+  const m = Math.max(0, Math.round(minutes));
+  return `${pad(Math.floor(m / 60))}:${pad(m % 60)}`;
 }

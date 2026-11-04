@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { dayKey } from './time';
-import { CommitRef, DayFile, DayOverrides, Segment, TaskInfo } from './types';
+import { CommitRef, DayFile, DayOverrides, ProjectMemory, Segment, TaskInfo } from './types';
 
 /**
  * Plain JSON files in the extension's global storage, shared by all VS Code windows.
@@ -9,6 +9,8 @@ import { CommitRef, DayFile, DayOverrides, Segment, TaskInfo } from './types';
  *   days/<date>/<windowId>.json   what each window tracked (only that window writes it)
  *   overrides/<date>.json         edits made in the timesheet
  *   titles.json                   task titles fetched from Jira
+ *   projects.json                 Odoo projects chosen before (suggestions)
+ *   branches.json                 branches to track, per repository
  */
 export class Store {
   private readonly own = new Map<string, DayFile>();
@@ -107,6 +109,39 @@ export class Store {
     writeJson(this.overridesPath(date), overrides);
   }
 
+  getProjectMemory(): ProjectMemory {
+    const memory = readJson<Partial<ProjectMemory>>(path.join(this.root, 'projects.json')) ?? {};
+    return { byTask: memory.byTask ?? {}, byRepo: memory.byRepo ?? {}, recent: memory.recent ?? [] };
+  }
+
+  /** Remember the project for this task (and its repository) so it is suggested next time. */
+  rememberProject(taskKey: string, repo: string | undefined, project: string): void {
+    const memory = this.getProjectMemory();
+    memory.byTask[taskKey] = project;
+    if (repo) {
+      memory.byRepo[repo] = project;
+    }
+    memory.recent = [project, ...memory.recent.filter(p => p !== project)].slice(0, 20);
+    writeJson(path.join(this.root, 'projects.json'), memory);
+  }
+
+  isTrackedBranch(repoRoot: string, branch: string): boolean {
+    return this.readTrackedBranches()[repoId(repoRoot)]?.includes(branch) ?? false;
+  }
+
+  addTrackedBranch(repoRoot: string, branch: string): void {
+    const all = this.readTrackedBranches();
+    const id = repoId(repoRoot);
+    if (!all[id]?.includes(branch)) {
+      all[id] = [...(all[id] ?? []), branch];
+      writeJson(path.join(this.root, 'branches.json'), all);
+    }
+  }
+
+  private readTrackedBranches(): Record<string, string[]> {
+    return readJson<Record<string, string[]>>(path.join(this.root, 'branches.json')) ?? {};
+  }
+
   getTitle(key: string): string | undefined {
     return this.readTitles()[key];
   }
@@ -133,6 +168,12 @@ export class Store {
     }
     return day;
   }
+}
+
+/** Same repository, same id: Windows paths differ in drive-letter case between APIs. */
+function repoId(repoRoot: string): string {
+  const resolved = path.resolve(repoRoot);
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
 }
 
 function readJson<T>(file: string): T | undefined {

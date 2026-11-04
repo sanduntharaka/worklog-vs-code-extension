@@ -7,19 +7,21 @@ import { Jira } from './jira';
 import { buildDay, rowToText, toCsv, toText } from './report';
 import { Store } from './store';
 import { taskFromText } from './tasks';
-import { addDays, today } from './time';
+import { addDays, formatHHMM, today } from './time';
 import { Tracker } from './tracker';
 import { RowOverride } from './types';
+
+type CopyField = 'project' | 'description' | 'time';
 
 type Inbound =
   | { type: 'ready' }
   | { type: 'nav'; delta?: number; today?: boolean }
   | { type: 'edit'; key: string; field: keyof RowOverride; value: string | number }
-  | { type: 'reset' | 'hide' | 'unhide' | 'copyRow' | 'openJira'; key: string }
-  | { type: 'copyText'; text: string }
+  | { type: 'reset' | 'hide' | 'unhide' | 'copyRow' | 'openJira' | 'markLogged' | 'unlog'; key: string }
+  | { type: 'copyField'; key: string; field: CopyField }
   | { type: 'copyAll' | 'exportCsv' | 'addEntry' };
 
-const EDITABLE = new Set<keyof RowOverride>(['title', 'start', 'end', 'minutes', 'description']);
+const EDITABLE = new Set<keyof RowOverride>(['title', 'start', 'end', 'minutes', 'description', 'project']);
 
 function isValidEdit(field: keyof RowOverride, value: unknown): boolean {
   switch (field) {
@@ -28,6 +30,8 @@ function isValidEdit(field: keyof RowOverride, value: unknown): boolean {
     case 'start':
     case 'end':
       return typeof value === 'string' && /^(\d{2}:\d{2})?$/.test(value);
+    case 'project':
+      return typeof value === 'string' && value.length <= 200;
     default:
       return typeof value === 'string' && value.length <= 5000;
   }
@@ -86,11 +90,14 @@ export class TimesheetPanel implements vscode.Disposable {
     }
     const activeKey = this.date === today() && this.tracker.state === 'tracking' ? this.tracker.task?.key : undefined;
     const report = this.report(activeKey);
+    const cfg = getConfig();
     void this.panel.webview.postMessage({
       type: 'render',
       report,
       isToday: this.date === today(),
-      jira: !!getConfig().jiraBaseUrl,
+      jira: !!cfg.jiraBaseUrl,
+      // Choices for the Project field: configured projects first, then ones used before.
+      projects: [...new Set([...cfg.projects, ...this.store.getProjectMemory().recent])],
     });
   }
 
@@ -105,11 +112,30 @@ export class TimesheetPanel implements vscode.Disposable {
         if (!EDITABLE.has(m.field) || !isValidEdit(m.field, m.value)) {
           return;
         }
+        if (m.field === 'project') {
+          this.setProject(m.key, String(m.value).trim());
+          break;
+        }
         this.updateOverride(m.key, o => {
           (o as Record<string, unknown>)[m.field] = m.value;
           if (m.field === 'description') {
             delete o.descriptionBy;
           }
+        });
+        break;
+      case 'markLogged': {
+        // Everything up to now is in Odoo; time tracked from here on shows as "still to log".
+        const row = this.report().rows.find(r => r.key === m.key);
+        if (row) {
+          this.updateOverride(m.key, o => {
+            o.loggedMinutes = row.minutes;
+          });
+        }
+        break;
+      }
+      case 'unlog':
+        this.updateOverride(m.key, o => {
+          delete o.loggedMinutes;
         });
         break;
       case 'reset':
@@ -128,9 +154,19 @@ export class TimesheetPanel implements vscode.Disposable {
         }
         return;
       }
-      case 'copyText':
-        await this.copy(m.text, 'Copied');
+      case 'copyField': {
+        const row = this.report().rows.find(r => r.key === m.key);
+        if (!row) {
+          return;
+        }
+        // Time: what is still to log, so a task logged earlier today isn't entered twice.
+        const time = row.loggedMinutes > 0 && row.toLogMinutes > 0 ? row.toLogMinutes : row.minutes;
+        const text = m.field === 'project' ? row.project : m.field === 'time' ? formatHHMM(time) : row.odooDescription;
+        if (text) {
+          await this.copy(text, `${m.field === 'time' ? 'Time spent' : m.field === 'project' ? 'Project' : 'Description'} copied`);
+        }
         return;
+      }
       case 'copyAll':
         await this.copy(toText(this.report()), 'Timesheet copied');
         return;
@@ -151,6 +187,21 @@ export class TimesheetPanel implements vscode.Disposable {
       }
     }
     this.render();
+  }
+
+  /** Set (or clear) the Odoo project of an entry and remember it for this task and repository. */
+  private setProject(key: string, project: string): void {
+    const row = this.report().rows.find(r => r.key === key);
+    this.updateOverride(key, o => {
+      if (project) {
+        o.project = project;
+      } else {
+        delete o.project;
+      }
+    });
+    if (project && row) {
+      this.store.rememberProject(row.displayKey, row.kind === 'manual' ? undefined : row.repo, project);
+    }
   }
 
   /** Apply a change to one row's override. Return null from `change` to delete the row's override. */

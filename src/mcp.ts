@@ -16,7 +16,7 @@ import { taskFromBranch } from './tasks';
 import { formatDuration, today } from './time';
 import { TaskInfo } from './types';
 
-const VERSION = '0.2.1';
+const VERSION = '0.4.0';
 const MAX_SUMMARY = 1000;
 
 interface AgentSettings {
@@ -50,11 +50,14 @@ const TOOLS = [
   {
     name: 'set_work_summary',
     description:
-      "Replace today's timesheet description for the current task with one clean summary. " +
-      'The summary must MERGE what the current description already says with the work done in this ' +
-      'conversation: keep points that are still true, drop duplicates and superseded details, add the new work. ' +
-      'Style: a short line per piece of work, joined with "; ", past tense, outcome-focused, plain words a ' +
-      'manager understands, no task key, no file paths unless essential, no filler. Usually under 300 characters.',
+      "Replace today's timesheet description for the current task with one clean summary. It becomes the " +
+      'Description of an Odoo timesheet entry. The summary must MERGE what the current description already says ' +
+      'with the work done in this conversation: keep points that are still true, drop duplicates and superseded ' +
+      'details, add the new work. Company rules: concise, specific and clearly about the work performed — never ' +
+      'generic ("Work", "Fixes", "Meeting", "Development"). Style: one or two short sentences in past tense, ' +
+      'outcome-focused, plain words a manager understands, ending with a full stop; separate items with "; ". ' +
+      'Do NOT include the Jira key — "[KEY] " is added automatically. No file paths unless essential, no filler. ' +
+      'Usually under 250 characters. Example: "Added the production-date sort to the stock list; updated the grid default order."',
     inputSchema: {
       type: 'object',
       properties: {
@@ -120,7 +123,8 @@ function getWorkSummary(args: { taskKey?: string; cwd?: string }): string {
     lines.push(`Branch: ${branch}`);
   }
   if (row) {
-    lines.push(`Today: ${row.start}–${row.end}, ${formatDuration(row.trackedMinutes)} tracked`);
+    lines.push(row.start ? `Today: ${row.start}–${row.end}, ${formatDuration(row.trackedMinutes)} tracked` : 'Today: no time tracked yet');
+    lines.push(`Odoo project: ${row.project || '(not chosen yet — the user picks it in the timesheet)'}`);
     lines.push('', `Current description${row.summaryByAgent ? ' (written by an agent earlier)' : row.edited ? ' (edited by the user — keep its points)' : ''}:`);
     lines.push(row.description || '(empty)');
     if (row.commits.length) {
@@ -158,7 +162,13 @@ function setWorkSummary(args: { summary?: string; taskKey?: string; cwd?: string
     ...(findRow(task.key) ? {} : { added: true, title: existing.title ?? task.title }),
   };
   store.writeOverrides(date, overrides);
-  return `Saved the timesheet description for ${task.key}:\n${summary}`;
+  const saved = findRow(task.key);
+  const lines = [`Saved. Odoo description for ${task.key}:`, saved?.odooDescription ?? summary];
+  const vague = saved?.issues.find(i => i.startsWith('Description is'));
+  if (vague) {
+    lines.push('', `Warning: ${vague}. Rewrite it more specifically and call set_work_summary again.`);
+  }
+  return lines.join('\n');
 }
 
 function findRow(key: string): TaskRow | undefined {

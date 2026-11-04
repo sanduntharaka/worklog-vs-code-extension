@@ -6,6 +6,7 @@
   const toast = /** @type {HTMLElement} */ (document.getElementById('toast'));
   let state = /** @type {any} */ (null);
   let showHidden = false;
+  let showChecks = true;
 
   const send = (msg) => vscode.postMessage(msg);
 
@@ -18,9 +19,13 @@
     return h ? `${h}h ${String(m % 60).padStart(2, '0')}m` : `${m}m`;
   };
 
-  const hours = (min) => `${Math.floor(min / 60)}:${String(Math.round(min % 60)).padStart(2, '0')}`;
+  /** Odoo "Time Spent" format: 75 → "01:15" */
+  const hhmm = (min) => {
+    const m = Math.max(0, Math.round(min));
+    return `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+  };
 
-  /** "2:05", "2.5", "2h 5m", "1h", "45m", "45" (minutes) → minutes */
+  /** "01:15", "1:15", "1.25", "1h 15m", "75m", "75" (minutes) → minutes */
   const parseHours = (text) => {
     const t = text.trim().toLowerCase();
     let m;
@@ -61,11 +66,13 @@
       end: focused.selectionEnd,
     };
 
-    const { report, isToday, jira } = state;
+    const { report, isToday, jira, projects } = state;
     const visible = report.rows.filter((r) => !r.hidden);
     const hidden = report.rows.filter((r) => r.hidden);
+    const toLog = report.toLogMinutes;
 
     app.innerHTML = `
+      <datalist id="projects">${projects.map((p) => `<option value="${esc(p)}"></option>`).join('')}</datalist>
       <header class="top">
         <div class="nav">
           <button class="icon" data-act="prev" title="Previous day" aria-label="Previous day">‹</button>
@@ -76,8 +83,10 @@
           <button class="icon" data-act="next" title="Next day" aria-label="Next day">›</button>
         </div>
         <div class="summary">
-          <div class="total">${fmt(report.totalMinutes)}</div>
-          <div class="muted">${visible.length} ${visible.length === 1 ? 'task' : 'tasks'}</div>
+          <div class="total" title="Time Spent, all entries">${hhmm(report.totalMinutes)}</div>
+          <div class="muted">${
+            !visible.length ? 'no entries' : toLog ? `<span class="tolog">${hhmm(toLog)} to log</span>` : '<span class="ok">all logged ✓</span>'
+          }</div>
         </div>
         <div class="actions">
           <button class="primary" data-act="copyAll" ${visible.length ? '' : 'disabled'}>Copy all</button>
@@ -85,8 +94,9 @@
           <button data-act="addEntry">+ Add entry</button>
         </div>
       </header>
+      ${visible.length ? checks(report) : ''}
       <main>
-        ${visible.length ? visible.map((r) => card(r, jira)).join('') : empty(isToday)}
+        ${visible.length ? visible.map((r) => card(r, jira, report.roundTo)).join('') : empty(isToday)}
         ${hidden.length ? hiddenSection(hidden) : ''}
       </main>`;
 
@@ -106,42 +116,106 @@
     }
   }
 
-  function card(r, jira) {
-    const badge =
-      r.kind === 'jira'
-        ? `<span class="badge jira">${esc(r.key.replace(/#\d+$/, ''))}</span>`
-        : `<span class="badge ${r.kind === 'manual' ? 'manual' : ''}">${r.kind === 'manual' ? 'Non-Jira' : r.kind === 'general' ? 'General' : 'Branch'}</span>`;
+  /** "Final verification" from the Odoo procedure. */
+  function checks(report) {
+    const failing = report.checks.filter((c) => !c.ok);
+    const head = failing.length
+      ? `<span class="warn-text">⚠ ${failing.length} ${failing.length === 1 ? 'check needs' : 'checks need'} attention</span>`
+      : '<span class="ok">✓ Ready for Odoo</span>';
+    return `
+      <section class="checks ${failing.length ? 'has-issues' : 'all-ok'}">
+        <button class="link checks-toggle" data-act="toggleChecks">${showChecks ? '▾' : '▸'} Final check · ${head}</button>
+        ${
+          showChecks
+            ? `<ul>${report.checks
+                .map(
+                  (c) =>
+                    `<li class="${c.ok ? 'ok' : 'warn-text'}">${c.ok ? '✓' : '⚠'} ${esc(c.label)}${c.detail ? ` <span class="muted">— ${esc(c.detail)}</span>` : ''}</li>`,
+                )
+                .join('')}</ul>`
+            : ''
+        }
+      </section>`;
+  }
+
+  function card(r, jira, roundTo) {
+    const isJira = r.kind === 'jira' && !r.displayKey.startsWith('manual:');
+    const badge = isJira
+      ? `<span class="badge jira">${esc(r.displayKey)}</span>`
+      : `<span class="badge ${r.kind === 'manual' ? 'manual' : ''}">${r.kind === 'manual' ? 'Non-Jira' : r.kind === 'general' ? 'General' : 'Branch'}</span>`;
     const source = [
       ...r.commits.map((c) => `<li><span class="tag">commit</span>${esc(c)}</li>`),
       ...r.notes.map((n) => `<li><span class="tag">note</span>${esc(n)}</li>`),
     ];
-    const diff = r.trackedMinutes !== r.minutes && !r.added;
+    const status =
+      r.loggedMinutes === 0
+        ? `<span class="status tolog" title="Not entered in Odoo yet">Not logged</span>`
+        : r.toLogMinutes === 0
+          ? `<span class="status ok" title="Entered in Odoo">✓ Logged ${hhmm(r.loggedMinutes)}</span>`
+          : `<span class="status tolog" title="Logged ${hhmm(r.loggedMinutes)} earlier; new time since then">Logged ${hhmm(r.loggedMinutes)} · ${hhmm(r.toLogMinutes)} to log</span>`;
+    const timeNote = [
+      r.start && r.end ? `${esc(r.start)}–${esc(r.end)}` : '',
+      !r.added && r.trackedMinutes !== r.minutes ? `tracked ${fmt(r.trackedMinutes)}` : '',
+    ]
+      .filter(Boolean)
+      .join(' · ');
+    const descPlaceholder = isJira ? 'What did you do? e.g. Added the date filter and updated the query.' : 'What did you do? Be specific.';
     return `
-      <article class="card${r.active ? ' active' : ''}" data-key="${esc(r.key)}">
+      <article class="card${r.active ? ' active' : ''}${r.issues.length ? ' has-issues' : ''}" data-key="${esc(r.key)}">
         <div class="card-head">
           ${badge}
-          <input class="title" data-field="title" value="${esc(r.title === r.key ? '' : r.title)}" placeholder="Title" aria-label="Title" spellcheck="false">
+          <input class="title" data-field="title" value="${esc(r.title === r.key ? '' : r.title)}" placeholder="${isJira ? 'Title' : 'Category, e.g. Internal Administration'}" aria-label="Title" spellcheck="false">
           ${r.active ? '<span class="live" title="Tracking now"><span class="dot"></span>Tracking</span>' : ''}
-          ${r.summaryByAgent ? '<span class="agent" title="Description written by your coding agent">✦ agent summary</span>' : ''}
-          ${r.edited && !r.added ? '<span class="edited" title="You edited this row">edited</span>' : ''}
+          ${status}
         </div>
-        <div class="times">
-          <label><span>Start</span><input type="time" data-field="start" value="${esc(r.start)}"></label>
-          <span class="arrow">→</span>
-          <label><span>End</span><input type="time" data-field="end" value="${esc(r.end)}"></label>
-          <label class="hours"><span>Hours</span><input data-field="minutes" value="${hours(r.minutes)}" title="e.g. 2:05, 2.5, 1h 30m"></label>
-          ${diff ? `<span class="muted small" title="Active time measured by the tracker">tracked ${fmt(r.trackedMinutes)}</span>` : ''}
+
+        <div class="fields">
+          <label class="field project">
+            <span>Project</span>
+            <div class="with-copy">
+              <input data-field="project" list="projects" value="${esc(r.project)}" placeholder="Choose or type the Odoo project" spellcheck="false">
+              <button class="icon copy" data-act="copyField" data-copy="project" title="Copy project" aria-label="Copy project" ${r.project ? '' : 'disabled'}>⧉</button>
+            </div>
+            ${r.projectSuggested ? '<small class="muted">suggested from earlier entries</small>' : ''}
+          </label>
+          <label class="field time">
+            <span>Time Spent</span>
+            <div class="with-copy">
+              <input data-field="minutes" value="${hhmm(r.minutes)}" title="HH:MM, e.g. 01:15 (rounded to ${roundTo || 1} min)">
+              <button class="icon copy" data-act="copyField" data-copy="time" title="Copy time spent${r.loggedMinutes && r.toLogMinutes ? ' still to log' : ''}" aria-label="Copy time spent">⧉</button>
+            </div>
+            ${timeNote ? `<small class="muted">${timeNote}</small>` : ''}
+          </label>
         </div>
-        <div class="desc">
-          <textarea data-field="description" rows="${Math.min(6, Math.max(2, Math.ceil(r.description.length / 90)))}" placeholder="What did you do?">${esc(r.description)}</textarea>
-          <button class="icon copy" data-act="copyDesc" title="Copy description" aria-label="Copy description">⧉</button>
+
+        <label class="field">
+          <span>Description
+            ${r.summaryByAgent ? '<em class="agent" title="Written by your coding agent">✦ agent summary</em>' : ''}
+            ${r.edited && !r.added ? '<em class="edited" title="You edited this entry">edited</em>' : ''}
+          </span>
+          <textarea data-field="description" rows="${Math.min(6, Math.max(2, Math.ceil(r.description.length / 90)))}" placeholder="${esc(descPlaceholder)}">${esc(r.description)}</textarea>
+        </label>
+        <div class="preview">
+          <span class="muted">Odoo:</span>
+          <span class="preview-text">${esc(r.odooDescription)}</span>
+          <button class="icon copy" data-act="copyField" data-copy="description" title="Copy description for Odoo" aria-label="Copy description">⧉</button>
         </div>
+
+        ${r.issues.length ? `<ul class="issues">${r.issues.map((i) => `<li>⚠ ${esc(i)}</li>`).join('')}</ul>` : ''}
+
         <footer>
           ${source.length ? `<details><summary>${sourceLabel(r)}</summary><ul>${source.join('')}</ul></details>` : '<span class="muted small">No commits or notes yet</span>'}
           <div class="row-actions">
-            <button class="ghost" data-act="copyRow">Copy</button>
-            ${r.kind === 'jira' && !r.key.startsWith('manual:') ? `<button class="ghost" data-act="openJira">${jira ? 'Open in Jira ↗' : 'Connect Jira'}</button>` : ''}
-            ${r.added ? '<button class="ghost danger" data-act="reset">Remove</button>' : r.edited || r.summaryByAgent ? '<button class="ghost" data-act="reset" title="Go back to the tracked values and commit-based description">Reset</button>' : ''}
+            ${
+              r.toLogMinutes > 0
+                ? `<button class="primary small-btn" data-act="markLogged" title="I've entered this in Odoo">✓ Mark as logged</button>`
+                : r.loggedMinutes > 0
+                  ? '<button class="ghost" data-act="unlog" title="Mark as not logged">Undo logged</button>'
+                  : ''
+            }
+            <button class="ghost" data-act="copyRow" title="Copy project, description and time">Copy</button>
+            ${isJira ? `<button class="ghost" data-act="openJira">${jira ? 'Jira ↗' : 'Connect Jira'}</button>` : ''}
+            ${r.added ? '<button class="ghost danger" data-act="reset">Remove</button>' : r.edited || r.summaryByAgent ? '<button class="ghost" data-act="reset" title="Go back to the tracked time and commit-based description">Reset</button>' : ''}
             ${r.added ? '' : '<button class="ghost" data-act="hide" title="Leave out of the timesheet">Hide</button>'}
           </div>
         </footer>
@@ -164,8 +238,8 @@
             ? rows
                 .map(
                   (r) => `<div class="hidden-row" data-key="${esc(r.key)}">
-                    <span>${esc(r.kind === 'jira' ? `${r.key} — ${r.title}` : r.title)}</span>
-                    <span class="muted">${fmt(r.minutes)}</span>
+                    <span>${esc(r.kind === 'jira' ? `${r.displayKey} — ${r.title}` : r.title)}</span>
+                    <span class="muted">${hhmm(r.minutes)}</span>
                     <button class="ghost" data-act="unhide">Restore</button>
                   </div>`,
                 )
@@ -179,7 +253,7 @@
     return `<div class="empty">
       <div class="empty-icon">⏱</div>
       <p>${isToday ? 'Nothing tracked yet today.' : 'Nothing tracked on this day.'}</p>
-      <p class="muted">${isToday ? 'Check out a task branch (e.g. <code>issue/TEST-101-…</code>) and start working, or start a non-Jira task from the status bar.' : 'Use “+ Add entry” to add time by hand.'}</p>
+      <p class="muted">${isToday ? 'Click the status bar and choose <b>Create Task Branch</b> (e.g. <code>issue/TEST-101-…</code>), or start a non-Jira task.' : 'Use “+ Add entry” to add time by hand.'}</p>
     </div>`;
   }
 
@@ -200,10 +274,13 @@
       case 'toggleHidden':
         showHidden = !showHidden;
         return render();
-      case 'copyDesc': {
-        const ta = /** @type {HTMLTextAreaElement} */ (btn.parentElement?.querySelector('textarea'));
-        return send({ type: 'copyText', text: ta.value });
-      }
+      case 'toggleChecks':
+        showChecks = !showChecks;
+        return render();
+      case 'copyField':
+        e.preventDefault();
+        if (key) send({ type: 'copyField', key, field: btn.dataset.copy });
+        return;
       case 'copyAll':
       case 'exportCsv':
       case 'addEntry':

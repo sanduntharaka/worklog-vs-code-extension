@@ -16,7 +16,9 @@ Update my Work Monitor timesheet description for the task we are working on.
 
 1. Call the \`get_work_summary\` tool (work-monitor MCP server) to read the current description, commits and notes.
 2. Write one clean summary that merges the existing description with what we did in this conversation, and save it with \`set_work_summary\`.
-3. Reply with the saved summary in one line.
+   It goes into our Odoo timesheet, so follow the company rules: specific about the work actually performed (never "Work", "Fixes", "Meeting"),
+   past tense, short sentences ending with a full stop, and without the Jira key (it is added as "[KEY]" automatically).
+3. Reply with the saved Odoo description in one line.
 
 $ARGUMENTS
 `;
@@ -36,7 +38,21 @@ export function installAgentServer(context: vscode.ExtensionContext): string {
     path.join(dir, 'settings.json'),
     JSON.stringify({ taskKeyPattern: c.get('taskKeyPattern'), generalBranches: c.get('generalBranches') }, null, 1),
   );
+  // Keep an already-installed /worklog command up to date (only the one we created).
+  const commandFile = worklogCommandFile();
+  try {
+    const existing = fs.readFileSync(commandFile, 'utf8');
+    if (existing !== WORKLOG_COMMAND && existing.includes('work-monitor MCP server')) {
+      fs.writeFileSync(commandFile, WORKLOG_COMMAND);
+    }
+  } catch {
+    // Not connected to Claude Code yet.
+  }
   return path.join(dir, 'mcp.js');
+}
+
+function worklogCommandFile(): string {
+  return path.join(os.homedir(), '.claude', 'commands', 'worklog.md');
 }
 
 export async function connectAgent(serverPath: string): Promise<void> {
@@ -87,9 +103,8 @@ async function connectClaudeCode(serverPath: string): Promise<void> {
     return;
   }
 
-  const commandsDir = path.join(os.homedir(), '.claude', 'commands');
-  fs.mkdirSync(commandsDir, { recursive: true });
-  const commandFile = path.join(commandsDir, 'worklog.md');
+  const commandFile = worklogCommandFile();
+  fs.mkdirSync(path.dirname(commandFile), { recursive: true });
   // Don't overwrite a /worklog command the user wrote themselves.
   const existing = fs.existsSync(commandFile) ? fs.readFileSync(commandFile, 'utf8') : undefined;
   const ours = existing === undefined || existing.includes('work-monitor MCP server');
